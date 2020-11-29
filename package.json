@@ -1,4 +1,8 @@
 {
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/brucemcpherson/qottle"
+  },
   "name": "qottle",
   "devDependencies": {
     "ava": "^3.13.0"

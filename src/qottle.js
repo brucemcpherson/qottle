@@ -1,3 +1,4 @@
+const { truncateSync } = require("fs");
 const { runInThisContext } = require("vm");
 
 class Qottle {
@@ -15,16 +16,18 @@ class Qottle {
       // how many can run at once
       concurrent: Infinity,
       // whether to keep a note of all keys ever seen or just those currently active or running
-      stickyKey: true,
+      sticky: false,
       // whether ti start the queue immediately or wait till its manually started
       immediate: true,
       // the others can be set for each queue entry
-      // 0 is low
-      priority: 0,
+      // 0 happens first
+      priority: 100,
       // console progress messages
       log: false,
+      // whether to catch an error and resolve or throw the error and reject
+      catchError: false,
       // whether to care about keys when provided
-      skipDuplicates: true,
+      skipDuplicates: false,
       // enable rate limited
       // if you want to have multiple services with different rate limits use multiple queue instances
       // if enabled, no more than rateLimitCalls will made in any rateLimitPeriod
@@ -41,15 +44,12 @@ class Qottle {
       // any optional changes to all that
       ...options,
     };
-    this._rates = {
-      periodStarted: null,
-      hits: 0
-    };
+
     // the things to be done
     this.queue = [];
 
-    // things that have been done for stickyKey instances
-    this.finished = [];
+    // things that have been done for sticky instances
+    this.sticky = [];
 
     // the things that are active
     this.active = [];
@@ -66,13 +66,17 @@ class Qottle {
       start: [],
       startqueue: [],
       stopqueue: [],
-      ratewait: []
+      ratewait: [],
+      add: []
     };
     // for simplicity ids a are just consecutive
     this.counter = 0;
 
+    // considered a new ratelimit attempt
+    this._NEW_ATTEMPT = 20
+
     // get started or not
-    this.paused = true;
+    this._paused = true;
     if (this.options.immediate) {
       this.startQueue();
     } else {
@@ -80,31 +84,31 @@ class Qottle {
     }
   }
 
-  get finishedSize() {
-    return this.finished.length;
+  stickySize() {
+    return this.sticky.length;
   }
 
   // how many are running
-  get activeSize() {
+  activeSize() {
     return this.active.length;
   }
 
   // how many are queued
-  get queueSize() {
+  queueSize() {
     return this.queue.length;
   }
 
   // return a list of all entries ever
-  get list() {
-    return this._allQueues.map(f=>f.entry)
+  list() {
+    return this._allQueues().map(f=>f.entry)
   }
 
-  get _allQueues() { 
-    return this.active.concat(this.queue, this.finished)
+  _allQueues() { 
+    return this.active.concat(this.queue, this.sticky)
   }
   // is this key already known
   getBykey(key = null) {
-    return key !== null && this._allQueues.find((f) => f.entry.key === key);
+    return key !== null && this._allQueues().find((f) => f.entry.key === key);
   }
 
   /**
@@ -153,6 +157,7 @@ class Qottle {
       this._checkEventName(eventName);
       this.events[eventName] = [];
     }
+    return this;
   }
 
   _checkEventName(eventName) {
@@ -186,7 +191,11 @@ class Qottle {
       skipped: false,
       id,
       action,
-      waitTime: 0
+      waitTime: 0,
+      attempts: 0,
+      waitStartedAt: null,
+      waitFinishedAt: null,
+      waitUntil: null
     };
 
     // wrap in a promise so handle finishing
@@ -229,24 +238,26 @@ class Qottle {
 
   // stop the queue when all active ones have finished
   stopQueue() {
-    this.paused = true;
+    this._paused = true;
     this._serviceEvent({
       eventName: "stopqueue",
     });
+    return this
   }
 
   // restart the queue
   startQueue() {
-    this.paused = false;
+    this._paused = false;
     this._serviceEvent({
       eventName: "startqueue",
     });
     this._serviceQueue();
+    return this
   }
 
   // is the queue started
-  get isStarted() {
-    return !this.paused;
+  isStarted() {
+    return !this._paused;
   }
 
   // check something is a function and fail if required
@@ -264,14 +275,17 @@ class Qottle {
   // clean out everything except that aleady running
   clear() {
     this.queue = [];
+    return this;
   }
 
-  clearFinished() {
-    this.finished = [];
+  clearSticky() {
+    this.sticky = [];
+    return this;
   }
 
   clearRateLimitHistory() { 
     this.clearRateLimitHistory = [];
+    return this;
   }
 
   // only need to keep those that might affect rate limit
@@ -286,28 +300,81 @@ class Qottle {
 
   drain() {
     this.clear();
-    this.clearFinished();
+    this.clearSticky();
     this.clearRateLimitHistory();
     console.log(
       `....queues drained. There were ${this.activeSize} still running - drain again when completed`
     );
-    return this.list;
+    return this.list();
+  }
+
+  _registerResolution({ entry, result, error }) {
+
+    const eventName = error ? "error" : "finish"
+    entry.finishedAt = new Date().getTime();
+    entry.runTime = entry.finishedAt - entry.startedAt;
+    entry.status = eventName;
+    entry.elapsed = entry.finishedAt - entry.queuedAt;
+    entry.error = error;
+
+    // throwing and error  varies by options
+    // but an error event is always signalled
+    const ob = {
+      entry,
+      result,
+      error,
+      eventName
+    };
+    // remove this item from the queue
+    this._finish(entry);
+    this._checkEmpty();
+
+    // do any events
+    this._serviceEvent(ob);
+
+    if (entry.log) {
+      this._logger({
+        entry,
+        message: `${entry.finishedAt}:${eventName} ${entry.id}${this._keyText(entry)}`
+      })
+    }
+
+    return ob;
+  }
+
+  _registerWaitTime ({ entry }) { 
+    if (entry.waitStartedAt) { 
+      entry.waitFinishedAt = entry.startedAt
+      entry.waitTime = entry.waitFinishedAt - entry.waitStartedAt;
+    }
+    return entry
+  }
+
+  _logger({ entry, message }) { 
+    if (entry.log) {
+      console.log(`....pqlog:${message}`)
+    }
+    return entry
   }
 
   // start something running
   _startItem({ item }) {
-    this.active.push(item);
+
+    // resolve and reject apply to the q.add() so completion returns a resolved promise
     const { entry, resolve, reject } = item;
+
     entry.startedAt = new Date().getTime();
     entry.status = "active";
 
-    if (entry.log) {
-      console.log(
-        `....pqlog:${entry.startedAt}:starting ${entry.id}${this._keyText(
-          entry
-        )}`
-      );
-    }
+    // if we were waiting then mark the end of the wait
+    this._registerWaitTime({entry})
+
+    // do any logging
+    this._logger({
+      entry,
+      message: `${entry.startedAt}:starting ${entry.id}${this._keyText(entry)}`
+    })
+
     // emit that we're going live
     this._serviceEvent({
       eventName: "start",
@@ -321,68 +388,27 @@ class Qottle {
       key: entry.key,
     });
 
-    // it's either already a promise or we need to make it one
-    const action = new Promise((resolve, reject) => {
-      if (entry.action instanceof Promise) {
-        entry
-          .action()
-          .then((result) => resolve(result))
-          .catch((err) => reject(err));
-      } else {
-        try {
-          const result = entry.action();
-          resolve(result);
-        } catch (err) {
-          reject(err);
-        }
+    // make the action into a promise
+    const action = new Promise((resolve, reject) => { 
+      try {
+        resolve(entry.action({ entry }))
+      } catch (error) { 
+        reject (error)
       }
-    });
+    })
 
-    // execute the thing
+    // first we need to make it a  promise
+    // the action will have been checked for being a function already - so we can just execute it
     return action
-      .then((result) => {
-        entry.finishedAt = new Date().getTime();
-        entry.runTime = entry.finishedAt - entry.startedAt;
-        entry.status = "finished";
-        entry.elapsed = entry.finishedAt - entry.queuedAt;
-
-        if (entry.log) {
-          console.log(
-            `....pqlog:${new Date().getTime()}:finished ${
-              entry.id
-            }${this._keyText(entry)}`
-          );
-        }
-        resolve({
-          entry,
-          result,
-        });
-        this._serviceEvent({
-          eventName: "finish",
-          result,
-          entry,
-        });
-      })
-      .catch((error) => {
-        entry.finishedAt = new Date().getTime();
-        entry.runTime = entry.finishedAt - entry.startedAt;
-        entry.status = "error";
-        entry.error = error;
-        reject({
-          entry,
-          error,
-        });
-        this._serviceEvent({
-          eventName: "error",
-          error,
-          entry,
-        });
-      })
-      .finally(() => {
-        this._finish(entry);
-        this._checkEmpty();
-        this._serviceQueue();
-      });
+    .then(result => { 
+      resolve(this._registerResolution({result, entry}))
+    }).catch(error => { 
+      const resolution = this._registerResolution({ entry, error });
+      return entry.catchError ? resolve(resolution) : reject(resolution)
+    })
+    .finally(() => {
+      this._serviceQueue();
+    });
   }
 
   // move from active queue to finished queue
@@ -394,7 +420,7 @@ class Qottle {
       );
     }
     const [item] = this.active.splice(index, 1);
-    if (this.options.stickyKey) this.finished.push(item);
+    if (this.options.sticky) this.sticky.push(item);
     return entry;
   }
 
@@ -420,17 +446,21 @@ class Qottle {
       );
     }
     q.splice(index, 0, addition);
+    this._serviceEvent({
+      eventName: 'add',
+      entry
+    })
     return addition;
   }
 
   /**
    * see if we're allowed to run another one right now
    */
-  get _isInfinite() { 
+  _isInfinite() { 
     return this.options.concurrent === Infinity
   }
-  get _isRoomForAnother() { 
-    return (this._isInfinite || this.activeSize < this.options.concurrent)
+  _isRoomForAnother() { 
+    return (this._isInfinite() || this.activeSize() < this.options.concurrent)
   }
   /**
    * rate limits
@@ -444,7 +474,7 @@ class Qottle {
    *  { rateLimitPeriod: 60 * 60 * 1000 , rateLimitMax: 10 }
    * this 
    */
-  get _nextOpportunity() { 
+   _nextOpportunity() { 
     
     // no need to wait at all
     const { rateLimitDelay, rateLimitMax, rateLimited, rateLimitPeriod} = this.options
@@ -511,24 +541,45 @@ class Qottle {
   _serviceQueue() {
 
     // if the queue isnt started, or theres' nothing to do or no room to do it then we're done
-    if (!this.isStarted || !this.queueSize || !this._isRoomForAnother) return Promise.resolve(null);
+    if (!this.isStarted() || !this.queueSize() || !this._isRoomForAnother()) return Promise.resolve(null);
     
     // see if rate limiting allow something to run
-    const waitUntil = this._nextOpportunity
+    const waitUntil = this._nextOpportunity()
+
+    // the first item in the queue
     const [item] = this.queue
+    
     if (!waitUntil) {
-      // now do the work
-      this.queue.shift();
+      // remove from queued items and push to the active queu
+      this.active.push(this.queue.shift())
+      // start the thing
       return this._startItem({ item });
     } else {
       // wait till the next opportunity before trying again
-      const waitTime = Math.max(this.options.rateLimitMinWait, waitUntil - new Date().getTime())
-      item.entry.waitTime += waitTime
-      this._serviceEvent({
-        eventName: 'ratewait',
-        entry: item.entry,
-        waitTime
-      })
+      const {entry} = item
+      const now = this._now()
+      // we'll wait until this time before trying again
+      const until = Math.max(
+        this.options.rateLimitMinWait + now,
+        waitUntil
+      );
+      // if its the first time we've seen this record it 
+      if (!entry.waitStartedAt) { 
+        entry.waitStartedAt = now
+      }
+      // other priotity items may have slipped in that needs a reevaluation of the waitime required
+      const waitTime = until - now
+
+      // if the waituntil time has changed significantly, then it's a new attempt
+      if (!entry.waitUntil || Math.abs(entry.waitUntil - until) > this._NEW_ATTEMPT) { 
+        entry.attempts++;
+        this._serviceEvent({
+          eventName: "ratewait",
+          entry,
+          waitTime,
+        });
+      }
+      entry.waitUntil = until
       return this.constructor.pTimeout(waitTime).then(() => this._serviceQueue());
     }
   }
@@ -547,7 +598,7 @@ class Qottle {
   }
 
   _checkEmpty() {
-    const empty = this.activeSize + this.queueSize === 0;
+    const empty = this.activeSize()+ this.queueSize()=== 0;
     if (empty)
       this._serviceEvent({
         eventName: "empty",
