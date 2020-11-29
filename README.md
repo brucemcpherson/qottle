@@ -229,9 +229,40 @@ Promise.all ([
 })
 ````
 
+## Error handling
 
+By default you'll deal with errors like this (all queue items are converted to async)
+````
+q.add (()=>something())
+.then (({result, entry})=>{ ... the result ... })
+.catch(({error, entry})=> { ... the error ...})
+````
+However, you can ask qottle to catch thrown errors.
+````
+const q = new qottle({
+  catchError: true
+})
+````
+Then any errors will be resolved (rather than rejected)
+````
+q.add (()=>something())
+.then (({result, entry, error})=>{ ... the result ... or check for error })
+````
 
+### Error event
 
+Irrespective of the catchError options, ````q.on('error', ...)```` will always fire on an error, and ````q.on('finish',...)```` will only trigger on a successful finish. 
+````
+q.on('error', ({entry,error})=> {
+  ... will always trigger on an error
+})
+````
+
+````
+q.on('finish', ({entry,result})=> {
+  ... will not trigger on an error
+})
+````
 ## Examples 
 
 See the test.js for many examples 
