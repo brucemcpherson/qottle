@@ -6,7 +6,9 @@ A queue that supports
 - rate limiting and delay
 - priorities
 
-These examples all use promise syntax, but obviously you can substitute async/await if you prefer.
+These examples all use promise syntax, but obviously you can substitute async/await if you prefer. 
+
+More details on qottle can be found at https://ramblings.mcpher.com/gassnippets2/qottle/
 
 ## Installation
 
@@ -88,6 +90,8 @@ Most options can be applied when the queue is initialized, then individually ove
 | rateLimitMax | 1 | how many items to allow to be outstading at once - this is an additional constraint to the concurrent value |
 | rateLimitMinWait | 100 | if a delay is required, qottle will calculate how much time is left in the rateLimitPeriod and wait that long before attempting to run. This is the minimum period to wait before trying again. Can be useful where the rate limited API time is slighty out of sync with your client |
 | catchError | false | normally a run error will be returned to the add function for you to catch. If catchError is set to true, then qottle will catch the error and pass it to the .then() of add(). See later for examples |
+| errorOnDuplicate | false | When adding to a queue,iIf skipDuplicates is enabled and a dup is detected the entry will resolve, with entry.skipped set to true. If you'd rather it treated a duplicate as an error set errorOnDuplicate to trues|
+| name | qottle | Can be useful if you have multiple queues and logging enabled - as the log includes the queue name |
 
 
 ## Events
@@ -156,7 +160,7 @@ Most methods and events return an Entry object that looks like this.
 | property | content |
 | ---- |  ---- |
 | ...options | all the options mentioned earlier |
-| status | 'finish', 'error', 'queued', 'active' |
+| status | 'finish', 'error', 'queued', 'active' , 'skipped'|
 | queuedAt | timestamp when first added |
 | startedAt | timestamp when started to run |
 | finishedAt | timestamp when finished run |
@@ -267,3 +271,139 @@ q.on('finish', ({entry,result})=> {
 
 See the test.js for many examples 
 
+## Recipes
+
+Here's a couple of more complicated but useful examples
+
+### Polling
+
+You can use qottle to manage endless, or constrained polling. In this scenario, we want to poll an aynch API a maximum of 100 times, but no more than 5 times every 10 seconds, and only 1 call at a time.
+
+set up the queue
+````
+  const q = new Qottle({
+    // polling every 1 seconds
+    concurrent: 1,
+    rateLimited: true,
+    rateLimitPeriod: 10 * 1000,
+    rateLimitMax: 5
+  });
+````
+the number of iterations (or Infinite for ever)
+````
+  const ITERATIONS = 100
+````
+This is where you'd make the async api call - For simulation as here, qottle has a handy timer you can use for timeouts as promises which just waits for a while then returns how long it waited. You could handle the results, or errors here, or use the qottle finish and error events.
+````
+  const action = () => q.timer(Math.floor(Math.random() * 2000));
+````
+handle the results of each poll - you could do this on item resolution of q.add, or by using the finish event - as here, where  polling results are just being added to an array
+````
+  const results = [];
+  q.on("finish", ({ entry, result }) => {
+    results.push({
+      entry,
+      result,
+    });
+  });
+
+````
+create a recursive function for adding stuff to the queue - this one should work for most situations. It will finally resolve when the number of iterations are reached.
+````
+  const adder = ({ entry, result } = { entry: { key: 0 } }) =>
+    q
+      .add(() => action(), { key: entry.key + 1 })
+      .then(({ entry, result }) =>
+        entry.key < ITERATIONS
+          ? adder({ entry, result })
+          : Promise.resolve({ entry, result })
+      );
+````
+kick it off - for testing, at the end, I'm checking that the final result and number of items processed is as expected
+````
+  return adder().then(({ entry, result }) => {
+    t.is(results.length, entry.key);
+    t.is(results.length, ITERATIONS);
+  });
+````
+
+### Handling duplicates from pubsub
+
+Pubsub is a great way to orchestrate your services, but often you'll get duplicates. Say you get a message to process something - you won't want to ack that message (and therefore prevent it sending reminders) until you've successfully processed it. On the other hand you don't want to run it again if you have it queued or if you've already run it. Of course this wont work if you have multiple instances of your service, but let's stick to the simple case for now. 
+
+If you provide a key (perhaps derived from a hash of the parameters to your service) when you add it to Qottle, and enabling skipDuplicates, qottle will not add to the queue but resolve (or reject if you have errorOnDuplicates set) addition requests if the same key is already queued or active. If you have the sticky option enabled, it will also check all finished items for duplicates too. 
+
+Here's an simulation, using 2 queues - one playing the pub role, and another the sub role.
+
+Initialize a queue to simulate sending messages from a pub service. Don't start it right away, as we want to first populate it and get the sub queue ready to go.
+````
+  const pub = new Qottle({
+    immediate: false,
+    concurrent: 8,
+    name: 'pub'
+  });
+````
+Populate it with a bunch of messages to be sent at random times, and randomly provoking some duplicate keys amongst them.
+````
+  const ps = Promise.all(
+    Array.from(new Array(20)).map((f, i, a) =>
+      pub.add(
+        () => {
+          return pub.timer(Math.floor(1000 * Math.random()));
+        },
+        // cause some duplicates to happen
+        { key: Math.floor(a.length * Math.random()) }
+      )
+    )
+  );
+````
+Now create a subscription queue and start it. We'll use sticky to skip anything we've ever seen before.
+````
+  const q = new Qottle({
+    skipDuplicates: true,
+    sticky: true,
+    name: 'sub'
+  });
+````
+In this sim, the subscriber will just wait a random  amount of time- this is where you'd handle the service request in your live subscription
+````
+  const dealWithSub = ({ entry }) => q.timer(Math.floor(2000 * Math.random()))
+````
+The finish request on the simulated pub queue would be analagous to the message.on event when using a real pubsub implementation. It'll trigger when each of the queued items is published, and add a task to the subscription queue, which will then check for duplicates and execute.
+````
+  pub.on("finish", ({ entry }) => { 
+    q.add(dealWithSub, {
+      key: entry.key,
+    }).then(({ entry, result, error }) => { 
+      if (entry.skipped) {
+        // .. the entry was not processed as it was a duplicate
+      } else { 
+        // .. the entry was processed and the result passed here
+      }
+      return result
+    }).catch (({entry, error})=> {
+      // handle the error
+    })
+  })
+````
+Finally we can start the pub queue - this will provoke entries in the sub queue
+````
+  pub.startQueue()
+````
+A real life example would be very simply structured something like this, and could of course contain all the usual ratelimiting etc as required.
+````
+  const q = new Qottle({
+    skipDuplicates: true,
+    sticky: true,
+    name: 'sub'
+  });
+
+  message.on (msg=>){
+    const decodedMessage = somehow(msg)
+    q.add(()=>doTheThing(decodedMessage), {key: decodedMessage.hash})
+    .then (({entry})=> entry.skipped  ? msg.ack() : null)
+    .catch((error)=> {
+      msg.nack())
+    })
+  })
+````
