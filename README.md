@@ -40,7 +40,7 @@ q.add (()=> doSomethingElse())
 Each entry is resolved as a promise, whether or not the original action was a promise - 
 ````
 q.add (()=> console.log('Im running')).then(()=> console.log('ive said im starting'))
-q.add (()=> doAnAsyncThing()).then({result} => console.log('the result was', result))
+q.add (()=> doAnAsyncThing()).then(({result}) => console.log('the result was', result))
 q.add (()=> console.log('its all over'))
 ````
 Or perhaps
@@ -111,7 +111,6 @@ In addition to the promise resolutions, events can also be triggered. For exampl
 | skip | an item has been skipped as it had a duplicate key |
 | start | an item has started |
 | startqueue | the queue has started |
-| stopqueue | the queue has been stopped |
 | stopqueue | the queue has been stopped  - stopped queues still accept additions |
 | ratewait | an entry is waiting for an opportunity to run but cant as it would violate a rate limit rule|
 | add | an entry is added |
@@ -175,7 +174,7 @@ Most methods and events return an Entry object that looks like this.
 | action | the function it ran |
 | skipped | whether the entry was skipped. Skipped items resolve successfully, but don't run and have this property set to true |
 | error | the error if one was thrown. Most useful with catchError: true |
-
+| context | you can pass this as an argument when adding to the queue and pick it up later- ignored by qottle |
 
 ## methods
 The are no 'property gets'. All are methods. Where the return value is 'self', you can chain methods.
@@ -196,7 +195,7 @@ The are no 'property gets'. All are methods. Where the return value is 'self', y
 
 ## Rate limiting
 
-A key capability of this queue is to deal with rate limiting. A queue can be set up to throttle calls - often to dela with APIS with rate limits. This is over and above the constraint of 'concurrent' which manages how many queue items can be executed at the same time. 
+A key capability of this queue is to deal with rate limiting. A queue can be set up to throttle calls - often to deal with APIS with rate limits. This is over and above the constraint of 'concurrent' which manages how many queue items can be executed at the same time. 
 
 Let's say you have an API that allows 10 calls per minute, and you don't mind if the they all run simultaneously.
 ````
@@ -282,7 +281,6 @@ You can use qottle to manage endless, or constrained polling. In this scenario, 
 set up the queue
 ````
   const q = new Qottle({
-    // polling every 1 seconds
     concurrent: 1,
     rateLimited: true,
     rateLimitPeriod: 10 * 1000,
@@ -331,7 +329,7 @@ kick it off - for testing, at the end, I'm checking that the final result and nu
 
 Pubsub is a great way to orchestrate your services, but often you'll get duplicates. Say you get a message to process something - you won't want to ack that message (and therefore prevent it sending reminders) until you've successfully processed it. On the other hand you don't want to run it again if you have it queued or if you've already run it. Of course this wont work if you have multiple instances of your service, but let's stick to the simple case for now. 
 
-If you provide a key (perhaps derived from a hash of the parameters to your service) when you add it to Qottle, and enabling skipDuplicates, qottle will not add to the queue but resolve (or reject if you have errorOnDuplicates set) addition requests if the same key is already queued or active. If you have the sticky option enabled, it will also check all finished items for duplicates too. 
+If you provide a key (perhaps derived from a hash of the parameters to your service) when you add it to Qottle, and enable skipDuplicates, qottle will not add to the queue but resolve (or reject if you have errorOnDuplicates set) addition requests if the same key is already queued or active. If you have the sticky option enabled, it will also check all finished items for duplicates too. 
 
 Here's an simulation, using 2 queues - one playing the pub role, and another the sub role.
 

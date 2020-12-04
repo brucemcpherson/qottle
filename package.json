@@ -6,7 +6,7 @@
   "name": "qottle",
   "author": "bruce mcpherson",
   "description": "a queue to handle concurrency, async, rate limiting, duplication skipping",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "devDependencies": {
     "ava": "^3.13.0"
   },

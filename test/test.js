@@ -354,7 +354,6 @@ test("check delay with ratelimit between each call plus delay period", (t) => {
     rateLimitMax: 2,
     rateLimitPeriod: 1500,
     rateLimitDelay: 3000,
- 
   });
 
   const mss = [20, 1000, 300, 500, 40];
@@ -455,7 +454,7 @@ test("check single threaded continuous polling", (t) => {
     concurrent: 1,
     rateLimited: true,
     rateLimitPeriod: 10 * 1000,
-    rateLimitMax: 5
+    rateLimitMax: 5,
   });
   // this will resolve and get out of the test after some number of iterations
   const ITERATIONS = 10;
@@ -497,7 +496,7 @@ test("simulate pubsub with sticky history", (t) => {
   const pub = new Qottle({
     immediate: false,
     concurrent: 8,
-    name: 'pub'
+    name: "pub",
   });
 
   // and populate it with a bunch of messages to publish out at random times
@@ -519,56 +518,120 @@ test("simulate pubsub with sticky history", (t) => {
   const q = new Qottle({
     skipDuplicates: true,
     sticky: true,
-    name: 'sub'
+    name: "sub",
   });
 
   // this is what the subscription queue will do when it receives an entry
   // just hang around abit then store result
   const subbed = [];
-  const dealWithSub = ({ entry }) => q.timer(Math.floor(2000 * Math.random()))
-
+  const dealWithSub = ({ entry }) => q.timer(Math.floor(2000 * Math.random()));
 
   // here's a pub entering the sub queue
-  pub.on("finish", ({ entry }) => { 
+  pub.on("finish", ({ entry }) => {
     q.add(dealWithSub, {
       key: entry.key,
-    }).then(pack => { 
+    }).then((pack) => {
       // both skipped and finished resolve
       const { entry, result, error } = pack;
-      subbed.push(pack)
+      subbed.push(pack);
       if (entry.skipped) {
-        t.is(result, undefined)
+        t.is(result, undefined);
         t.not(error, undefined);
-      } else { 
+      } else {
         t.not(result, undefined);
         t.is(error, undefined);
       }
-      return pack
-    })
-  })
-
+      return pack;
+    });
+  });
 
   // now we can start publishing
-  pub.startQueue()
+  pub.startQueue();
 
   // we'll retunr this to close the test
-  let resolve = null
+  let resolve = null;
   const done = new Promise((r) => {
     resolve = r;
   });
 
   // because this is a simulated end - give the q time to settle before  finally resolving
-  ps.then(pubbed => { 
+  ps.then((pubbed) => {
     return q.timer(2000).then(() => {
       resolve(pubbed);
     });
-  })
+  });
 
-  return done.then(pubbed => { 
+  return done.then((pubbed) => {
     t.is(subbed.length, pubbed.length);
-    console.log(`  ..${subbed.filter(f=>f.entry.skipped).length} pubs were intentionally skipped from ${subbed.length}`)
-    return subbed
+    console.log(
+      `  ..${
+        subbed.filter((f) => f.entry.skipped).length
+      } pubs were intentionally skipped from ${subbed.length}`
+    );
+    return subbed;
+  });
+});
+
+test("simulate apps script polling from vue client", t => { 
+  const q = new Qottle({
+    // polling only 1 at a time, no more than 5 every 10 seconds
+    // and with at least 2 secs between each
+    concurrent: 1,
+    rateLimited: true,
+    rateLimitPeriod: 10 * 1000,
+    rateLimitMax: 3,
+    rateLimitDelay: 2500,
+  });
+  const RANDOMTIME = 2000;
+  // simuate getting some data server side - just tun a few times - then cancel
+  const ITERATIONS = 5;
+  let latestData = null
+
+  q.on('finish', ({ entry }) => { 
+    // for this sim, the runtimeshould always be less that the max random time
+    t.is(entry.runTime <= RANDOMTIME, true);
+  })
+
+  // this simulates a get taking some random time
+  const getNext = ({ entry }) => {
+    return q.timer(Math.random() * RANDOMTIME).then(() => [
+      {
+        category: "food",
+        value: entry.context.count,
+        user: "john",
+      },
+    ]);
+  }
+
+  const adder = ({ entry }) =>
+    q.add(({ entry }) => getNext({ entry }), {
+      context: {...entry.context, count: entry.context.count+1},
+      key: entry.key + 1
+    }).then(({ entry, result }) => {
+      latestData = result
+      if (entry.key < ITERATIONS) {
+        t.not(latestData, undefined)
+        return adder({ entry, result })
+      } else {
+        return Promise.resolve({result})
+      } 
+    });
+  
+  // kick the whole thing off
+  return adder({
+    entry: {
+      key: 0,
+      context: {
+        value: 'anything you want',
+        count: 0
+      }
+    }
+  }).then(({ result, entry }) => { 
+    
+    t.not(result, undefined)
+    t.is(result[0].value, ITERATIONS);
+    return result
   })
 
 
-});
+})

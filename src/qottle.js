@@ -10,7 +10,9 @@ const _checkFunction = (func, fail = true) => {
 const _flid  = () => new Date().getTime() + Math.random();
 
 // just handy for pulling out the resolve/reject of a new promise
-const _pack  = () => {   
+const _pack = () => {   
+  let resolve = null;
+  let reject = null;
   const promise = new Promise((r, e) => {
     resolve = r;
     reject = e;
@@ -46,12 +48,8 @@ class QottleEntry {
       queuedAt: now,
       startedAt: null,
       finishedAt: null,
-      get elapsed () { 
-        return this.queuedAt - this.startedAt;
-      },
-      get runTime() { 
-        return this.finishedAt - this.startedAt;
-      },
+      elapsed: null,
+      runTime:  null,
       skipped: false,
       id: now + Math.random(),
       action: ({ entry }) => Promise.resolve({entry}),
@@ -59,7 +57,7 @@ class QottleEntry {
       attempts: 0,
       waitStartedAt: null,
       waitFinishedAt: null,
-      waitUntil: null,
+      waitUntil: null
     };
 
     // check that all options are viable
@@ -119,7 +117,9 @@ class QottleOptions {
       // default key for entries
       key: null,
       // whether to error on dups
-      errorOnDuplicate: false
+      errorOnDuplicate: false,
+      // this can be used to pass context data around
+      context: null
     }
     // check that all options are viable
     const errs = Object.keys(options).filter((f) => !this.defaultOptions.hasOwnProperty(f))
@@ -184,6 +184,11 @@ class Qottle {
         resolve(ms);
       }, ms);
     });
+  }
+
+  // a handy promise pack
+  propack() { 
+    return _pack()
   }
 
   stickySize() {
@@ -409,7 +414,8 @@ class Qottle {
     entry.finishedAt = new Date().getTime();
     entry.status = eventName;
     entry.error = error;
-
+    entry.elapsed = entry.finishedAt - entry.queuedAt
+    entry.runTime = entry.finishedAt - entry.startedAt
     // throwing and error  varies by options
     // but an error event is always signalled
     const ob = {
@@ -598,13 +604,18 @@ class Qottle {
     // as long as there's no delay issue we still might be able to go
     if (!toosoon.length && scoped.length < rateLimitMax) return 0;
 
-    // wiat for whichever is the longest
+    // use the earliest in scope, and the latest for delay
     const ts = toosoon.length && toosoon[toosoon.length - 1];
-    const sc = scoped.length && scoped[scoped.length - 1];
+    const sc =
+      scoped.length &&
+      scoped.length >= rateLimitMax &&
+      scoped[0];
+
     const nextTime = Math.max(
       ((ts && ts.startedAt) || 0) + rateLimitDelay,
       ((sc && sc.startedAt) || 0) + rateLimitPeriod
     );
+
     return nextTime;
   }
 
