@@ -447,7 +447,6 @@ test("check non sticky", (t) => {
     return results;
   });
 });
-
 test("check single threaded continuous polling", (t) => {
   const q = new Qottle({
     // polling every 1 seconds
@@ -490,6 +489,7 @@ test("check single threaded continuous polling", (t) => {
     t.is(results.length, ITERATIONS);
   });
 });
+
 
 test("simulate pubsub with sticky history", (t) => {
   // we'll set up a queue to simulate a publisher
@@ -635,3 +635,77 @@ test("simulate apps script polling from vue client", t => {
 
 
 })
+
+test("simulate apps script polling from vue client using finish event", (t) => {
+  const q = new Qottle({
+    // polling only 1 at a time, no more than 5 every 10 seconds
+    // and with at least 2 secs between each
+    concurrent: 1,
+    rateLimited: true,
+    rateLimitPeriod: 10 * 1000,
+    rateLimitMax: 3,
+    rateLimitDelay: 2500,
+  });
+  const RANDOMTIME = 2000;
+  // simuate getting some data server side - just tun a few times - then cancel
+  const ITERATIONS = 5;
+
+  // we'll resolve this when all iterations are completed
+  const done = q.propack()
+
+  const adder = ({ entry }) => { 
+    return q.add(({ entry }) => getNext({ entry }), {
+      context: { ...entry.context, count: entry.context.count + 1 },
+      key: entry.key + 1,
+    });
+  }
+
+
+  // this time a finish event will prompt an addition
+  q.on("finish", ({ entry, result }) => {
+    // for this sim, the runtimeshould always be less that the max random time
+    t.is(entry.runTime <= RANDOMTIME, true);
+    // we can just add the next one here
+    if (entry.context.count < ITERATIONS) {
+      adder({ entry, result })
+    } else { 
+      done.resolve({entry, result})
+    }
+  });
+
+  // error handling can be done here
+
+
+  // this simulates a get taking some random time
+  const getNext = ({ entry }) => {
+    return q.timer(Math.random() * RANDOMTIME).then(() => [
+      {
+        category: "food",
+        value: entry.context.count,
+        user: "john",
+      },
+    ]);
+  };
+
+  // kick the whole thing off
+  adder({
+    entry: {
+      key: 0,
+      context: {
+        value: "anything you want",
+        count: 0,
+      },
+    },
+  }).then(({ result, entry }) => {
+    t.not(result, undefined);
+    t.is(result[0].value, entry.context.count);
+    return result;
+  });
+
+  return done.promise.then(({entry, result}) => { 
+    t.is(result[0].value, ITERATIONS)
+    t.is(entry.context.count, ITERATIONS);
+    t.is(entry.key, ITERATIONS);
+    return result
+  })
+});

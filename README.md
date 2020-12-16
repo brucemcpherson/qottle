@@ -323,6 +323,28 @@ kick it off - for testing, at the end, I'm checking that the final result and nu
     t.is(results.length, entry.key);
     t.is(results.length, ITERATIONS);
   });
+
+````
+#### Alternative and simpler approach
+
+That polling example, had a recursive approach, where a promise resolution caused a new queue addition. Personaly I prefer this approach, but is a litle difficult to get your head around. Another (simpler) method could be to use the finish event.
+
+````
+  const adder = ({ entry, result } = { entry: { key: 0 } }) =>
+    q.add(() => action(), { key: entry.key + 1 })
+
+````
+And use the finish event to call it again
+````
+  q.on('finish', (({entry, result})=> {
+    // optionally check here for whether it should finish
+    adder ({entry, result})
+  })
+
+````
+and just start it like this
+````
+  adder()
 ````
 
 ### Handling duplicates from pubsub
