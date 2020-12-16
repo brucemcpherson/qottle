@@ -8,22 +8,19 @@
   "description": "a queue to handle concurrency, async, rate limiting, duplication skipping",
   "version": "1.0.4",
   "devDependencies": {
-    "ava": "^3.13.0"
+    "ava": "^3.13.0",
+    "eslint": "^7.15.0"
   },
   "scripts": {
     "test": "ava"
   },
   "license": "MIT",
   "main": "./src/qottle.js",
-  "module": "./src/qottle.js",
-  "exports": {
-    "require": "./src/qottle.js",
-    "import": "./src/qottle.js"
-  },
   "keywords": [
     "queue",
     "async",
     "ratelimit",
     "concurrency"
-  ]
+  ],
+  "dependencies": {}
 }

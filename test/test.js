@@ -1,5 +1,5 @@
 const test = require("ava");
-const Qottle = require("../src/qottle");
+const Qottle = require("../dist/qottle");
 
 const LEEWAY = 100;
 

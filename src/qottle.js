@@ -62,7 +62,8 @@ class QottleEntry {
 
     // check that all options are viable
     const errs = Object.keys(entry).filter(
-      (f) => !this.defaultEntry.hasOwnProperty(f)
+      (f) =>
+        !Object.prototype.hasOwnProperty.call(this.defaultEntry, f)
     );
     if (errs.length) {
       throw `invalid entry options ${errs.join(",")}`;
@@ -122,7 +123,9 @@ class QottleOptions {
       context: null
     }
     // check that all options are viable
-    const errs = Object.keys(options).filter((f) => !this.defaultOptions.hasOwnProperty(f))
+    const errs = Object.keys(options)
+      .filter(f => !Object.prototype.hasOwnProperty.call(this.defaultOptions,f))
+    
     if (errs.length) {
       throw `invalid options ${errs.join(',')}`
     }
@@ -273,7 +276,7 @@ class Qottle {
    * @param {object} item the item to be habdled contains the entry, resolve, and reject
    */
   _handleDuplicate({ item }) { 
-    const { entry, resolve, reject } = item;
+    const { entry } = item;
     this._logger({
       entry,
       message: `skipped ${entry.id} as duplicated}`,
@@ -402,10 +405,9 @@ class Qottle {
     this.clear();
     this.clearSticky();
     this.clearRateLimitHistory();
-    this._logger({
-      entry,
-      message: `queues drained. There were ${this.activeSize} still running - drain again when completed`,
-    });
+    console.log(
+       `queues drained. There were ${this.activeSize} still running - drain again when completed`,
+    );
     return this.list();
   }
 
@@ -452,7 +454,7 @@ class Qottle {
   }
 
   _logger({ entry, message }) {
-    if (entry.log) {
+    if (entry && entry.log) {
       console.log(`....queue:${this.options.name}:${message}`);
     }
     return entry;
@@ -619,7 +621,7 @@ class Qottle {
     return nextTime;
   }
 
-  _isInscope = (historyItem, now) => {
+  _isInscope (historyItem, now) {
     // how long ago this started
     const t = now - historyItem.startedAt;
     // whether this should be considered a blocker
@@ -627,10 +629,11 @@ class Qottle {
       this.options.rateLimitPeriod && t < this.options.rateLimitPeriod;
 
     return blocker;
-  };
-  _isTooSoon = (historyItem, now) => {
+  }
+
+  _isTooSoon  (historyItem, now)  {
     return historyItem.startedAt + this.options.rateLimitDelay >= now;
-  };
+  }
 
   // this returns all the calls that have been made inside the current rate limit period
   callsInDelay() {
