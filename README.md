@@ -426,4 +426,25 @@ A real life example would be very simply structured something like this, and cou
       msg.nack())
     })
   })
+
 ````
+
+## qottle -vs- rottler
+
+See also https://github.com/brucemcpherson/rottler
+
+In many cases theses are interchangeable, but there are some differences that may help to choose one over the other
+| feature | qottle | rottler |
+| ----- | ---- | ---- |
+| synch | no | yes |
+| async | yes | yes |
+| smoothing | no | yes |
+| iterator | no | yes |
+| multi thread | yes | no |
+| concurrence control | yes | n/a |
+| logging | yes | no |
+| duplicate management | yes | no |
+| transformers | no | yes |
+| apps script | yes | yes |
+| node | yes | yes |
+| javascript | yes | yes |
